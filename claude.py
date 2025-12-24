@@ -9,6 +9,8 @@ import os
 import ssl
 import requests
 import warnings
+import pytz  # [수정] 한국 시간을 위해 라이브러리 추가
+
 warnings.filterwarnings('ignore')
 
 # ---------------------------------------------------------
@@ -47,7 +49,7 @@ INVEST_DAYS = (TARGET_DATE - SIMULATED_TODAY).days # 28일
 ANNUAL_FACTOR = 365 / INVEST_DAYS
 
 # ---------------------------------------------------------
-# [4] 함수 정의 (스마트 날짜 로직 + 에러 방지 강화)
+# [4] 함수 정의 (스마트 날짜 로직 유지)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def calculate_volatility_robust(ticker, start_date, end_date=None):
@@ -83,12 +85,6 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             if len(daily_returns) > 1:
                 # 엑셀 STDEV.S (ddof=1) * 15.87 적용
                 vol = daily_returns.std(ddof=1) * 15.87 * 100
-                
-                # ★ [긴급 수정] 서버 에러 방지용 (Series -> Float 변환)
-                if isinstance(vol, pd.Series):
-                    vol = vol.iloc[0]
-                vol = float(vol)
-                
                 return vol, daily_returns
         return None, None
 
@@ -123,12 +119,6 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             daily_returns = df['Close'].pct_change().dropna()
             if len(daily_returns) > 1:
                 vol = daily_returns.std(ddof=1) * 15.87 * 100
-                
-                # ★ [긴급 수정] 여기도 똑같이 적용
-                if isinstance(vol, pd.Series):
-                    vol = vol.iloc[0]
-                vol = float(vol)
-                
                 return vol, daily_returns
     except: pass
     return None, None
@@ -137,8 +127,7 @@ def update_volatility(start_date):
     vol1, ret1 = calculate_volatility_robust("WBD", start_date)
     vol2, ret2 = calculate_volatility_robust("NFLX", start_date)
     
-    # ★ [수정] None 체크를 더 명확하게 함
-    if (vol1 is not None) and (vol2 is not None):
+    if vol1 and vol2:
         st.session_state['wbd_vol'] = vol1
         st.session_state['nflx_vol'] = vol2
         st.session_state['wbd_returns_data'] = ret1
@@ -161,7 +150,11 @@ def get_live_prices():
         n_data = session.get("https://query1.finance.yahoo.com/v8/finance/chart/NFLX", headers=headers, timeout=5).json()
         curr_wbd = w_data['chart']['result'][0]['meta']['regularMarketPrice']
         curr_nflx = n_data['chart']['result'][0]['meta']['regularMarketPrice']
-        now_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # [수정] 서버 위치와 상관없이 '한국 시간(Asia/Seoul)' 강제 적용
+        kst = pytz.timezone('Asia/Seoul')
+        now_time = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
+        
         return curr_wbd, curr_nflx, "API-Direct", now_time
     except:
         return None, None, "Fail", None
@@ -201,7 +194,8 @@ if curr_wbd is None:
     curr_wbd = c1.number_input("WBD ($)", value=28.89)
     curr_nflx = c2.number_input("NFLX ($)", value=930.00)
 else:
-    st.success(f"✅ 실시간 데이터 수신 성공 (방법: {method}) | 🕒 기준 시간: {check_time}")
+    # 한국 시간임을 명시하기 위해 (KST) 문구 추가
+    st.success(f"✅ 실시간 데이터 수신 성공 (방법: {method}) | 🕒 기준 시간: {check_time} (KST)")
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("WBD 현재가", f"${curr_wbd:.2f}")
