@@ -47,7 +47,7 @@ INVEST_DAYS = (TARGET_DATE - SIMULATED_TODAY).days # 28일
 ANNUAL_FACTOR = 365 / INVEST_DAYS
 
 # ---------------------------------------------------------
-# [4] 함수 정의 (스마트 날짜 로직 유지)
+# [4] 함수 정의 (스마트 날짜 로직 + 에러 방지 강화)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def calculate_volatility_robust(ticker, start_date, end_date=None):
@@ -83,6 +83,12 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             if len(daily_returns) > 1:
                 # 엑셀 STDEV.S (ddof=1) * 15.87 적용
                 vol = daily_returns.std(ddof=1) * 15.87 * 100
+                
+                # ★ [긴급 수정] 서버 에러 방지용 (Series -> Float 변환)
+                if isinstance(vol, pd.Series):
+                    vol = vol.iloc[0]
+                vol = float(vol)
+                
                 return vol, daily_returns
         return None, None
 
@@ -117,6 +123,12 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             daily_returns = df['Close'].pct_change().dropna()
             if len(daily_returns) > 1:
                 vol = daily_returns.std(ddof=1) * 15.87 * 100
+                
+                # ★ [긴급 수정] 여기도 똑같이 적용
+                if isinstance(vol, pd.Series):
+                    vol = vol.iloc[0]
+                vol = float(vol)
+                
                 return vol, daily_returns
     except: pass
     return None, None
@@ -125,7 +137,8 @@ def update_volatility(start_date):
     vol1, ret1 = calculate_volatility_robust("WBD", start_date)
     vol2, ret2 = calculate_volatility_robust("NFLX", start_date)
     
-    if vol1 and vol2:
+    # ★ [수정] None 체크를 더 명확하게 함
+    if (vol1 is not None) and (vol2 is not None):
         st.session_state['wbd_vol'] = vol1
         st.session_state['nflx_vol'] = vol2
         st.session_state['wbd_returns_data'] = ret1
