@@ -9,7 +9,7 @@ import os
 import ssl
 import requests
 import warnings
-import pytz  # [수정] 한국 시간을 위해 라이브러리 추가
+import pytz  # 한국 시간을 위해 라이브러리 추가
 
 warnings.filterwarnings('ignore')
 
@@ -75,6 +75,11 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
                 except: prices = data[col]
             else:
                 prices = data[col]
+            
+            # [수정] 데이터프레임일 경우 Series로 강제 변환
+            if isinstance(prices, pd.DataFrame):
+                prices = prices.iloc[:, 0]
+
             prices = prices.dropna()
             
             mask = (prices.index.date >= fetch_start) & (prices.index.date <= fetch_end)
@@ -84,7 +89,16 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             
             if len(daily_returns) > 1:
                 # 엑셀 STDEV.S (ddof=1) * 15.87 적용
-                vol = daily_returns.std(ddof=1) * 15.87 * 100
+                std_val = daily_returns.std(ddof=1)
+                
+                # [수정 핵심] 결과가 Series나 DataFrame이면 숫자(float)로 강제 변환
+                if isinstance(std_val, (pd.Series, pd.DataFrame)):
+                    if not std_val.empty:
+                        std_val = std_val.iloc[0]
+                    else:
+                        return None, None
+                
+                vol = float(std_val) * 15.87 * 100
                 return vol, daily_returns
         return None, None
 
@@ -118,7 +132,12 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             df = pd.DataFrame({'Close': cs}, index=pd.to_datetime(ts, unit='s'))
             daily_returns = df['Close'].pct_change().dropna()
             if len(daily_returns) > 1:
-                vol = daily_returns.std(ddof=1) * 15.87 * 100
+                std_val = daily_returns.std(ddof=1)
+                # [수정 핵심] 여기도 안전장치 추가
+                if isinstance(std_val, (pd.Series, pd.DataFrame)):
+                    std_val = std_val.iloc[0]
+                    
+                vol = float(std_val) * 15.87 * 100
                 return vol, daily_returns
     except: pass
     return None, None
@@ -127,13 +146,20 @@ def update_volatility(start_date):
     vol1, ret1 = calculate_volatility_robust("WBD", start_date)
     vol2, ret2 = calculate_volatility_robust("NFLX", start_date)
     
-    if vol1 and vol2:
+    # [수정] Pandas Ambiguity Error 방지를 위해 명확한 None 체크로 변경
+    if (vol1 is not None) and (vol2 is not None):
         st.session_state['wbd_vol'] = vol1
         st.session_state['nflx_vol'] = vol2
         st.session_state['wbd_returns_data'] = ret1
         st.session_state['nflx_returns_data'] = ret2
         try:
-            df = pd.concat([ret1, ret2], axis=1, join='inner')
+            # 데이터프레임 병합 시 Series 이름 충돌 방지
+            r1 = ret1.copy()
+            r2 = ret2.copy()
+            if isinstance(r1, pd.Series): r1.name = 'WBD'
+            if isinstance(r2, pd.Series): r2.name = 'NFLX'
+            
+            df = pd.concat([r1, r2], axis=1, join='inner')
             st.session_state['correlation'] = df.corr().iloc[0, 1]
         except:
             st.session_state['correlation'] = None
@@ -151,7 +177,7 @@ def get_live_prices():
         curr_wbd = w_data['chart']['result'][0]['meta']['regularMarketPrice']
         curr_nflx = n_data['chart']['result'][0]['meta']['regularMarketPrice']
         
-        # [수정] 서버 위치와 상관없이 '한국 시간(Asia/Seoul)' 강제 적용
+        # [기능 유지] 서버 위치와 상관없이 '한국 시간(Asia/Seoul)' 강제 적용
         kst = pytz.timezone('Asia/Seoul')
         now_time = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
         
