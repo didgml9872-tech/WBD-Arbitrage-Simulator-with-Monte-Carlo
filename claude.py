@@ -39,17 +39,24 @@ if 'wbd_returns_data' not in st.session_state: st.session_state['wbd_returns_dat
 if 'nflx_returns_data' not in st.session_state: st.session_state['nflx_returns_data'] = None
 
 # ---------------------------------------------------------
-# [3] 날짜 설정 (형님 시점: 2025년 12월 24일)
+# [3] 날짜 설정 (사이드바에서 변경 가능하도록 수정)
 # ---------------------------------------------------------
-SIMULATED_TODAY = datetime.date(2025, 12, 24)
+st.sidebar.header("📅 시뮬레이션 날짜 설정")
+SIMULATED_TODAY = st.sidebar.date_input(
+    "현재 시점 (Today)",
+    value=datetime.date(2025, 12, 24),
+    min_value=datetime.date(2025, 12, 1),
+    max_value=datetime.date(2026, 1, 21)
+)
 TARGET_DATE = datetime.date(2026, 1, 21)
 
-# ★ 투자 기간 및 연환산 계수 계산 (28일 기준)
-INVEST_DAYS = (TARGET_DATE - SIMULATED_TODAY).days # 28일
-ANNUAL_FACTOR = 365 / INVEST_DAYS
+# ★ 투자 기간 및 연환산 계수 계산 (동적 변경)
+INVEST_DAYS = (TARGET_DATE - SIMULATED_TODAY).days 
+if INVEST_DAYS <= 0: INVEST_DAYS = 0 # 종료일 지나면 0 처리
+ANNUAL_FACTOR = 365 / INVEST_DAYS if INVEST_DAYS > 0 else 0
 
 # ---------------------------------------------------------
-# [4] 함수 정의 (스마트 날짜 로직 유지)
+# [4] 함수 정의 (스마트 날짜 로직 & 에러 방지 유지)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def calculate_volatility_robust(ticker, start_date, end_date=None):
@@ -197,7 +204,8 @@ if st.session_state['nflx_vol'] == 29.5 and st.session_state['wbd_vol'] == 49.0:
 
 menu = st.radio("👇 메뉴 선택", ["📉 시나리오 분석", "🎲 몬테카를로", "📊 변동성 상세"], horizontal=True, label_visibility="collapsed")
 
-# 사이드바
+# 사이드바 설정 계속
+st.sidebar.markdown("---")
 st.sidebar.header("🎛️ 딜 조건 설정")
 target_entry = st.sidebar.number_input("목표 진입가 ($)", value=27.00, step=0.1)
 deal_price = 30.00
@@ -206,7 +214,7 @@ deal_price = 30.00
 wbd_input_capital = st.sidebar.number_input("WBD 투자금액 ($)", value=10000, step=1000)
 
 st.sidebar.caption("💡 WBD 포지션을 입력하면 헷지 규모(숏)는 자동 산출됩니다.")
-st.sidebar.info(f"📅 오늘(시점): {SIMULATED_TODAY}\n\n🎯 공개매수 종료일: {TARGET_DATE}")
+st.sidebar.info(f"📅 현재 시점: {SIMULATED_TODAY}\n\n🎯 공개매수 종료일: {TARGET_DATE}")
 
 curr_wbd, curr_nflx, method, check_time = get_live_prices()
 st.sidebar.markdown("---")
@@ -227,6 +235,7 @@ col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("WBD 현재가", f"${curr_wbd:.2f}")
 col2.metric("NFLX 현재가", f"${curr_nflx:.2f}")
 
+# 영업일 계산 (동적 날짜 반영)
 days_remaining = np.busday_count(SIMULATED_TODAY, TARGET_DATE)
 if days_remaining < 0:
     st.error("⚠️ 공개매수 종료일이 지났습니다.")
