@@ -39,24 +39,27 @@ if 'wbd_returns_data' not in st.session_state: st.session_state['wbd_returns_dat
 if 'nflx_returns_data' not in st.session_state: st.session_state['nflx_returns_data'] = None
 
 # ---------------------------------------------------------
-# [3] 날짜 설정 (사이드바에서 변경 가능하도록 수정)
+# [3] 날짜 설정 (자동 동기화 모드)
 # ---------------------------------------------------------
-st.sidebar.header("📅 시뮬레이션 날짜 설정")
-SIMULATED_TODAY = st.sidebar.date_input(
-    "현재 시점 (Today)",
-    value=datetime.date(2025, 12, 24),
-    min_value=datetime.date(2025, 12, 1),
-    max_value=datetime.date(2026, 1, 21)
-)
+# ★ 수정된 부분: 사용자가 입력하는 게 아니라, 실제 한국 시간을 가져와서 2025년으로 매핑
+kst = pytz.timezone('Asia/Seoul')
+now_kst = datetime.datetime.now(kst)
+
+# 현실의 '월/일'을 가져와서 시나리오 연도(2025)에 붙임
+try:
+    SIMULATED_TODAY = datetime.date(2025, now_kst.month, now_kst.day)
+except ValueError: # 윤년 이슈 예외처리 (2월 29일 등)
+    SIMULATED_TODAY = datetime.date(2025, now_kst.month, now_kst.day - 1)
+
 TARGET_DATE = datetime.date(2026, 1, 21)
 
-# ★ 투자 기간 및 연환산 계수 계산 (동적 변경)
+# ★ 투자 기간 및 연환산 계수 계산
 INVEST_DAYS = (TARGET_DATE - SIMULATED_TODAY).days 
-if INVEST_DAYS <= 0: INVEST_DAYS = 0 # 종료일 지나면 0 처리
+if INVEST_DAYS <= 0: INVEST_DAYS = 0 
 ANNUAL_FACTOR = 365 / INVEST_DAYS if INVEST_DAYS > 0 else 0
 
 # ---------------------------------------------------------
-# [4] 함수 정의 (스마트 날짜 로직 & 에러 방지 유지)
+# [4] 함수 정의 (기존 기능 100% 유지)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def calculate_volatility_robust(ticker, start_date, end_date=None):
@@ -83,7 +86,6 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             else:
                 prices = data[col]
             
-            # [수정] 데이터프레임일 경우 Series로 강제 변환
             if isinstance(prices, pd.DataFrame):
                 prices = prices.iloc[:, 0]
 
@@ -95,10 +97,8 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             daily_returns = prices.pct_change().dropna()
             
             if len(daily_returns) > 1:
-                # 엑셀 STDEV.S (ddof=1) * 15.87 적용
                 std_val = daily_returns.std(ddof=1)
                 
-                # [수정 핵심] 결과가 Series나 DataFrame이면 숫자(float)로 강제 변환
                 if isinstance(std_val, (pd.Series, pd.DataFrame)):
                     if not std_val.empty:
                         std_val = std_val.iloc[0]
@@ -140,7 +140,6 @@ def calculate_volatility_robust(ticker, start_date, end_date=None):
             daily_returns = df['Close'].pct_change().dropna()
             if len(daily_returns) > 1:
                 std_val = daily_returns.std(ddof=1)
-                # [수정 핵심] 여기도 안전장치 추가
                 if isinstance(std_val, (pd.Series, pd.DataFrame)):
                     std_val = std_val.iloc[0]
                     
@@ -153,14 +152,12 @@ def update_volatility(start_date):
     vol1, ret1 = calculate_volatility_robust("WBD", start_date)
     vol2, ret2 = calculate_volatility_robust("NFLX", start_date)
     
-    # [수정] Pandas Ambiguity Error 방지를 위해 명확한 None 체크로 변경
     if (vol1 is not None) and (vol2 is not None):
         st.session_state['wbd_vol'] = vol1
         st.session_state['nflx_vol'] = vol2
         st.session_state['wbd_returns_data'] = ret1
         st.session_state['nflx_returns_data'] = ret2
         try:
-            # 데이터프레임 병합 시 Series 이름 충돌 방지
             r1 = ret1.copy()
             r2 = ret2.copy()
             if isinstance(r1, pd.Series): r1.name = 'WBD'
@@ -184,7 +181,6 @@ def get_live_prices():
         curr_wbd = w_data['chart']['result'][0]['meta']['regularMarketPrice']
         curr_nflx = n_data['chart']['result'][0]['meta']['regularMarketPrice']
         
-        # [기능 유지] 서버 위치와 상관없이 '한국 시간(Asia/Seoul)' 강제 적용
         kst = pytz.timezone('Asia/Seoul')
         now_time = datetime.datetime.now(kst).strftime("%Y-%m-%d %H:%M:%S")
         
@@ -204,8 +200,7 @@ if st.session_state['nflx_vol'] == 29.5 and st.session_state['wbd_vol'] == 49.0:
 
 menu = st.radio("👇 메뉴 선택", ["📉 시나리오 분석", "🎲 몬테카를로", "📊 변동성 상세"], horizontal=True, label_visibility="collapsed")
 
-# 사이드바 설정 계속
-st.sidebar.markdown("---")
+# 사이드바
 st.sidebar.header("🎛️ 딜 조건 설정")
 target_entry = st.sidebar.number_input("목표 진입가 ($)", value=27.00, step=0.1)
 deal_price = 30.00
@@ -214,7 +209,15 @@ deal_price = 30.00
 wbd_input_capital = st.sidebar.number_input("WBD 투자금액 ($)", value=10000, step=1000)
 
 st.sidebar.caption("💡 WBD 포지션을 입력하면 헷지 규모(숏)는 자동 산출됩니다.")
-st.sidebar.info(f"📅 현재 시점: {SIMULATED_TODAY}\n\n🎯 공개매수 종료일: {TARGET_DATE}")
+
+# 영업일 계산 (자동)
+days_remaining = np.busday_count(SIMULATED_TODAY, TARGET_DATE)
+if days_remaining < 0:
+    st.error("⚠️ 공개매수 종료일이 지났습니다.")
+    days_remaining = 0
+
+# 날짜 정보를 사이드바에 표시 (입력창 X, 정보 O)
+st.sidebar.info(f"📅 현재 시점(Auto): {SIMULATED_TODAY}\n\n🎯 공개매수 종료일: {TARGET_DATE}\n\n⏳ 남은 영업일: {days_remaining}일")
 
 curr_wbd, curr_nflx, method, check_time = get_live_prices()
 st.sidebar.markdown("---")
@@ -228,18 +231,11 @@ if curr_wbd is None:
     curr_wbd = c1.number_input("WBD ($)", value=28.89)
     curr_nflx = c2.number_input("NFLX ($)", value=930.00)
 else:
-    # 한국 시간임을 명시하기 위해 (KST) 문구 추가
     st.success(f"✅ 실시간 데이터 수신 성공 (방법: {method}) | 🕒 기준 시간: {check_time} (KST)")
 
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("WBD 현재가", f"${curr_wbd:.2f}")
 col2.metric("NFLX 현재가", f"${curr_nflx:.2f}")
-
-# 영업일 계산 (동적 날짜 반영)
-days_remaining = np.busday_count(SIMULATED_TODAY, TARGET_DATE)
-if days_remaining < 0:
-    st.error("⚠️ 공개매수 종료일이 지났습니다.")
-    days_remaining = 0
 
 T_years = max(days_remaining / 252.0, 0.001)
 
@@ -253,7 +249,7 @@ wbd_shares = wbd_input_capital / target_entry
 wbd_total_amt = wbd_shares * target_entry 
 nflx_short_amt = wbd_total_amt * hedge_ratio 
 nflx_short_shares = nflx_short_amt / curr_nflx
-total_real_capital = wbd_total_amt + nflx_short_amt # (WBD 매수 + NFLX 숏)
+total_real_capital = wbd_total_amt + nflx_short_amt 
 
 col3.metric("남은 영업일", f"{days_remaining}일")
 col4.metric("헷지 비율", f"{hedge_ratio:.2f}배")
@@ -266,7 +262,6 @@ st.markdown("---")
 if menu == "📉 시나리오 분석":
     st.subheader("📊 넷플릭스 등락에 따른 손익표")
     
-    # 기간 및 연환산 기준 안내 (상단 1회 표시)
     st.info(f"""
     **ℹ️ 수익률 기준 알림 (Investment Period: {INVEST_DAYS} Days)**
     * **투자 기간:** {SIMULATED_TODAY} ~ {TARGET_DATE} (총 {INVEST_DAYS}일)
@@ -274,7 +269,6 @@ if menu == "📉 시나리오 분석":
     * 괄호 안의 **(연 ...%)** 수치는 이를 1년(365일) 기준으로 환산한 수치입니다.
     """)
     
-    # 자본금 내역 표시
     c1, c2, c3 = st.columns(3)
     c1.metric("💰 총 필요 자본(Total)", f"${total_real_capital:,.0f}")
     c2.metric("📦 WBD 매수", f"${wbd_total_amt:,.0f}")
@@ -285,14 +279,13 @@ if menu == "📉 시나리오 분석":
     for m in moves:
         total = ((deal_price - target_entry) * wbd_shares) + (-(nflx_short_amt * m))
         
-        # 연환산 수익률 계산
         simple_roi = (total / total_real_capital) * 100
         annual_roi = simple_roi * ANNUAL_FACTOR
         
         results.append({
             "NFLX 변동": f"{m*100:+.0f}%", 
             "최종손익($)": round(total), 
-            "수익률(%)": f"{simple_roi:.2f}% (연 {annual_roi:.1f}%)" # 문자열 포맷팅
+            "수익률(%)": f"{simple_roi:.2f}% (연 {annual_roi:.1f}%)" 
         })
         
     df = pd.DataFrame(results)
@@ -306,7 +299,6 @@ if menu == "📉 시나리오 분석":
         mime="text/csv"
     )
     
-    # 차트용 데이터는 숫자로 다시 만듦
     df['수익률_숫자'] = df['최종손익($)'] / total_real_capital * 100
     st.plotly_chart(px.bar(df, x="NFLX 변동", y="최종손익($)", color="수익률_숫자", color_continuous_scale="RdBu"), use_container_width=True)
 
@@ -317,7 +309,6 @@ elif menu == "🎲 몬테카를로":
     st.subheader(f"🎲 {TARGET_DATE} 넷플릭스 주가 및 수익 예측")
     st.caption(f"ℹ️ 적용된 변동성(Vol): NFLX {nflx_vol:.2f}% (기반 데이터: 12/5 ~ 현재)")
     
-    # 몬테카를로 탭에도 상단 안내 1회 표시
     st.info(f"""
     **ℹ️ 수익률 기준 알림 (Investment Period: {INVEST_DAYS} Days)**
     * **투자 기간:** {SIMULATED_TODAY} ~ {TARGET_DATE} (총 {INVEST_DAYS}일)
@@ -341,31 +332,27 @@ elif menu == "🎲 몬테카를로":
 
         profit = ((deal_price - target_entry) * wbd_shares) + ((curr_nflx - sim_prices) * nflx_short_shares)
         
-        # 총 자본금(Total) 기준으로 ROI 계산
         roi = (profit / total_real_capital) * 100
         
         st.markdown("---")
         st.markdown("### 💰 [2단계] 최종 수익률 분포")
         
         mean_roi = np.mean(roi)
-        mean_roi_annual = mean_roi * ANNUAL_FACTOR # 연환산 평균
+        mean_roi_annual = mean_roi * ANNUAL_FACTOR 
         
         win_rate = np.sum(roi > 0)/sims*100
         var_95 = np.percentile(roi, 5)
 
         c1, c2, c3 = st.columns(3)
-        # 평균 수익률 옆에 연환산 병기
         c1.metric("평균 수익률", f"{mean_roi:.2f}% (연 {mean_roi_annual:.1f}%)")
         c2.metric("승률", f"{win_rate:.1f}%")
         c3.metric("VaR (95%)", f"{var_95:.2f}%")
         
-        # 승률 설명 문구
         st.info(f"""
         **💡 승률(Win Rate)이란?** 10,000번의 미래 시뮬레이션을 돌렸을 때, **최종 손익이 $0(원금 보전) 이상으로 끝난 횟수의 비율**입니다. 
         (예: 승률 {win_rate:.1f}% = 100번 투자하면 {int(win_rate)}번은 돈을 벌거나 잃지 않고, {100-int(win_rate)}번만 손실을 볼 가능성이 있다는 뜻입니다.)
         """)
         
-        # ★★★ [복구 완료] 음의 베타에 대한 중요한 설명 (삭제 금지) ★★★
         st.warning("""
         ⚠️ **중요: 실제 수익률은 이보다 높을 가능성이 큽니다**
         
@@ -383,7 +370,7 @@ elif menu == "🎲 몬테카를로":
         st.plotly_chart(fig_r, use_container_width=True)
 
 # ---------------------------------------------------------
-# [화면 3] 변동성 상세 (기능 100% 유지)
+# [화면 3] 변동성 상세
 # ---------------------------------------------------------
 elif menu == "📊 변동성 상세":
     st.subheader("📈 변동성 데이터 관리")
